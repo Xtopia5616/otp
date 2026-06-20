@@ -9,21 +9,6 @@
 
 ## 0. 变更摘要 (Changelog)
 
-本文档相对 0.9 的关键修订：
-
-| 变更 | 说明 |
-| :--- | :--- |
-| **密钥层级重构** | 引入信封加密（Envelope Encryption）：DEK 随机生成且恒定，由 Master/RK/PRF 各自派生的 KEK 包装。修复 v2.1 中密码轮换后恢复密钥解出过期 DEK 的致命缺陷。 |
-| **KDF 升级** | 由 PBKDF2-SHA256 600k 改为 **Argon2id**（Wasm），符合 2026 口令哈希标准。相应放宽 CSP 至 `wasm-unsafe-eval`。 |
-| **PRF 定位明确** | Passkey 注册为 Better Auth 凭证，WebAuthn 断言既建立会话又输出 PRF 解包 DEK，实现彻底免密（含新设备在线同步）。MP 仍为注册/恢复的强制根因子。 |
-| **恢复授权补全** | 注册时额外存 RK 的 Argon2id 验证哈希（独立盐）；恢复重置端点校验该哈希通过后才更新 LAK/盐/包装并吊销所有会话，杜绝无鉴权重置导致的数据丢失 DoS。 |
-| **领域模型补全** | 新增第 5 章：完整定义 TOTP/HOTP `Account` 模型、参数规范、base32 编码，并据此明确三方合并的字段级语义。 |
-| **API 契约集中** | 新增第 9 章：统一端点表与请求/响应 schema，消除 v2.1 中端点散落、无契约的问题。 |
-| **安全声明诚实化** | 内存擦除机制重新定界：明确其无法清除 `CryptoKey` 内部状态与 JS 不可变字符串，仅限可覆写的 `Uint8Array` 中间产物。 |
-| **OCC 与基数澄清** | 明确 Vault 与 User 1:1 基数、版本号语义、初值与 CAS 更新规则。 |
-
-### v1.1 相对 1.0 的修订
-
 | 变更 | 说明 |
 | :--- | :--- |
 | **PRF 多设备化** | `wrappedDekByPrf` 由 `vault` 单字段迁出为独立 `passkey_wrap` 表（1:N，按 `credentialId` 索引），支持多设备多 Passkey 各自独立包装同一 $DEK$；`prf_salt` 定为用户级盐共用。新增 `GET/POST/DELETE /api/passkey-wraps` 端点。 |
