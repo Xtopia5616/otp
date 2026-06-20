@@ -495,19 +495,24 @@ function parseEncryptedPayload(encoded: string): ParsedEncryptedPayload {
 ### 4.5 错误类型
 
 ```typescript
-/** 密文格式错误（解析失败、版本未知） */
-class FormatError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'FormatError';
+// 错误类继承 CryptoError 基类（权威定义见 Engineering.md §6.1）；
+// 物理位置：src/lib/crypto/errors.ts（见 Design.md §10.3）。
+// 基类 CryptoError 位于 src/lib/models/errors.ts，由依赖边 crypto/ → models/ 支撑。
+import { CryptoError } from '$lib/models/errors';
+
+/** 密文格式错误（封装解析失败、版本未知、IV 长度非法） */
+export class FormatError extends CryptoError {
+  readonly code = 'FORMAT_ERROR';
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, 'decode', options);
   }
 }
 
-/** AEAD 解密/认证失败 */
-class DecryptionError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'DecryptionError';
+/** AEAD 解密/认证失败（密钥不匹配或密文篡改） */
+export class DecryptionError extends CryptoError {
+  readonly code = 'DECRYPTION_ERROR';
+  constructor(message = '解密失败', options?: ErrorOptions) {
+    super(message, 'decrypt', options);
   }
 }
 ```
@@ -935,6 +940,7 @@ DT(hmacResult: Uint8Array): number {
 ```
 
 ### 10.4 TOTP 实现
+> **模块契约（权威）**：`otp/` 模块内部函数遵循**抛错语义**——签名 `Promise<string>`，失败时抛 `CryptoError` 子类（`EncodingError`，base32 解码失败等）。此为模块的权威返回约定，与 [Engineering.md](./Engineering.md) §6.3 一致。`Result<T, E>` 模式作为**调用侧可选**包装工具（由调用方将 `Promise` 转为 `Result`），不作为 `otp/` 模块契约的一部分。
 
 ```typescript
 /**
@@ -1236,14 +1242,16 @@ interface ParsedEncryptedPayload {
   ciphertext: Uint8Array; // 密文 + 128 位 tag
 }
 
-/** 密文格式错误 */
-class FormatError extends Error {
-  name = 'FormatError';
+/** 密文格式错误（继承 CryptoError，权威定义见 Engineering.md §6.1） */
+export class FormatError extends CryptoError {
+  readonly code = 'FORMAT_ERROR';
+  constructor(message: string, options?: ErrorOptions) { super(message, 'decode', options); }
 }
 
-/** AEAD 解密失败 */
-class DecryptionError extends Error {
-  name = 'DecryptionError';
+/** AEAD 解密失败（继承 CryptoError，权威定义见 Engineering.md §6.1） */
+export class DecryptionError extends CryptoError {
+  readonly code = 'DECRYPTION_ERROR';
+  constructor(message = '解密失败', options?: ErrorOptions) { super(message, 'decrypt', options); }
 }
 ```
 

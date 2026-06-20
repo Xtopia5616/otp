@@ -415,6 +415,11 @@ export const db = drizzle(client, { schema });
 ### 6.1 自定义错误类层级
 
 WebOTP 定义四类领域错误，形成扁平继承结构。所有自定义错误继承自统一基类 `WebOtpError`，便于类型守卫和统一捕获。
+> **错误类物理位置约定（权威）**：错误类跨两文件存放，由依赖方向 `crypto/ → models/` 支撑（见 §9.1 依赖图）：
+> - `src/lib/models/errors.ts`：基类 `WebOtpError`、`CryptoError`、以及非密码学错误 `OccConflictError`/`NetworkError`/`SessionRevokedError`/`ApiError` 及其子类（`RateLimitError`/`ForbiddenError`/`NotFoundError`/`ConflictError`/`ServerError`）。
+> - `src/lib/crypto/errors.ts`：`CryptoError` 的细化子类 `DecryptionError`/`KdfError`/`EncodingError`，以及密文格式错误 `FormatError`。
+> - `crypto/errors.ts` 仅 import `CryptoError` 基类自 `models/errors.ts`，**不**反向引入其他错误；`models/errors.ts` 零依赖。
+> 此约定与 [Design.md](./Design.md) §10.3 一致。
 
 ```typescript
 // src/lib/models/errors.ts
@@ -572,6 +577,12 @@ export class EncodingError extends CryptoError {
   readonly code = 'ENCODING_ERROR';
   constructor(message: string, options?: ErrorOptions) { super(message, 'decode', options); }
 }
+
+/** 密文封装格式错误（解析失败、版本未知、IV 长度非法） */
+export class FormatError extends CryptoError {
+  readonly code = 'FORMAT_ERROR';
+  constructor(message: string, options?: ErrorOptions) { super(message, 'decode', options); }
+}
 ```
 
 ### 6.2 继承关系
@@ -581,7 +592,8 @@ WebOtpError (abstract)
 ├── CryptoError              // 密码学操作失败
 │   ├── DecryptionError      // AEAD 解密失败
 │   ├── KdfError             // Argon2id 派生失败
-│   └── EncodingError        // base32/base64 解码失败
+│   ├── EncodingError        // base32/base64 编解码失败
+│   └── FormatError          // 密文封装格式错误（v=1;iv=;ct= 解析失败/版本未知）
 ├── OccConflictError         // OCC 版本冲突（412），携带 serverVersion/serverEncryptedBlob/serverWrappedDekByMaster
 ├── NetworkError             // 网络不可达 / 超时
 ├── SessionRevokedError      // 会话被吊销（401）
@@ -601,15 +613,18 @@ WebOtpError (abstract)
 | 网络请求 | 抛出 `NetworkError` | 失败路径需由状态机捕获，统一进入 offline/conflict 分支 |
 | OCC 冲突 | 抛出 `OccConflictError` | 携带合并所需的远程数据，状态机需捕获后执行三方合并 |
 | 会话校验 | 抛出 `SessionRevokedError` | 需由全局拦截器捕获，强制锁定并跳转登录页 |
-| OTP 计算 | 返回 `Result<TotpCode, CryptoError>` | OTP 计算是高频调用，`Result` 模式避免 try/catch 性能开销 |
+| OTP 计算 | `otp/` 模块内部函数抛出 `CryptoError` 子类（`EncodingError`），签名 `Promise<string>`（与 CryptoSpec §10 一致）；`Result` 类型作为**调用侧可选**包装工具，由调用方按需使用，不强制 | 模块内部保持 CryptoSpec 的抛错语义，避免与 CryptoSpec 不一致；`Result` 模式仍可用于 UI/高频调用侧避免 try/catch 开销，但属调用方职责而非模块契约 |
 
 ```typescript
-// Result 类型工具
+// Result 类型工具（调用侧可选包装，非 otp/ 模块契约）
 type Result<T, E extends WebOtpError> = { ok: true; value: T } | { ok: false; error: E };
 
-// OTP 计算使用 Result 模式
-function generateTotp(secret: Uint8Array, period: number): Result<string, CryptoError> {
-  // ...
+// otp/ 模块内部签名（权威，与 CryptoSpec §10 一致）：抛 CryptoError 子类
+//   async function generateTotp(...): Promise<string>  // 失败抛 EncodingError
+
+// 调用侧按需包装为 Result（示例）：
+function toResult<T>(promise: Promise<T>): Promise<Result<T, WebOtpError>> {
+  return promise.then((value) => ({ ok: true, value }), (error) => ({ ok: false, error }));
 }
 ```
 
@@ -877,9 +892,11 @@ src/lib/
 ```
 components/ → state/ → crypto/ ← otp/
               state/ → models/
+crypto/     → models/   # 新增：crypto/errors.ts 继承 models/errors.ts 的 CryptoError 基类
 server/     → crypto/
 server/     → models/
 ```
+> **新增边说明**：`crypto/ → models/` 为本版新增（见 [Design.md](./Design.md) §10.2）——`crypto/errors.ts` 中的 `DecryptionError`/`KdfError`/`EncodingError`/`FormatError` 继承 `models/errors.ts` 的 `CryptoError` 基类，仅用于错误基类，最小且单向。`crypto/` 仍**不得** import `state/` 或 `server/`。
 
 **禁止**：
 

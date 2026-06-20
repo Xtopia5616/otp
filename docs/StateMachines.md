@@ -155,7 +155,7 @@ stateDiagram-v2
 ### 3.2 错误处理拦截器架构
 
 ```typescript
-// src/lib/server/api-client.ts — 全局 HTTP 拦截器伪码
+// src/lib/api-client/api-client.ts — 全局 HTTP 拦截器伪码（客户端；见 Design.md §3.6）
 async function apiFetch(input: RequestInfo, init?: RequestInit): Promise<Response> {
   const response = await fetch(input, init);
 
@@ -232,7 +232,7 @@ $$
 ### 4.3 重试实现
 
 ```typescript
-// src/lib/state/retry-queue.ts
+// src/lib/state/vault.svelte.ts（重试队列内置于单体同步引擎；见 Design.md §4.3）
 const MAX_RETRIES = 5;
 const BASE_DELAY_MS = 1_000;
 const MAX_DELAY_MS = 30_000;
@@ -369,7 +369,8 @@ WebOtpError (abstract)
 ├── CryptoError                    // 密码学操作失败（基类，不直接抛出）
 │   ├── DecryptionError            // AES-GCM 解密失败（Blob/wrappedDek 损坏或密钥错误）
 │   ├── KdfError                   // Argon2id 派生失败（参数非法/Wasm 加载失败）
-│   └── EncodingError              // base32/base64 编解码失败
+│   ├── EncodingError              // base32/base64 编解码失败
+│   └── FormatError                // 密文封装格式错误（v=1;iv=;ct= 解析失败/版本未知）
 ├── NetworkError                   // fetch TypeError / 超时
 ├── OccConflictError               // 412 OCC 版本冲突，携带 serverVersion/serverEncryptedBlob/serverWrappedDekByMaster
 ├── SessionRevokedError            // 401 会话被吊销
@@ -389,6 +390,7 @@ WebOtpError (abstract)
 | `DecryptionError` | AES-GCM 解密 `encryptedBlob` 或 `wrappedDek*` 时 AEAD 校验失败 | 解锁表单："密码错误或数据损坏"（不区分是密码错还是数据损坏，防信息泄露） | `unlocking → locked` |
 | `KdfError` | Argon2id Wasm 加载失败或参数非法（`m/t/p` 超出范围） | 阻断式错误页："密钥派生失败，请检查浏览器兼容性" | 阻断，不可恢复 |
 | `EncodingError` | base32 解码 OTP secret 失败 | 账户详情页："密钥格式无效"，高亮该字段 | 不影响其他账户 |
+| `FormatError` | 密文封装 `v=1;iv=;ct=` 解析失败（字段缺失/版本未知/IV 长度非 12 字节），见 CryptoSpec §4.3–4.4 | Blob 路径：阻断式 `error.vault.blobFormat`"Vault 格式版本不受支持"；wrappedDek 路径：并入 `DecryptionError` 提示（不区分，防信息泄露） | 阻断，不可恢复 |
 | `OccConflictError` | `PUT /api/vault` 返回 412，携带 `serverVersion`/`serverEncryptedBlob`/`serverWrappedDekByMaster`（见 Engineering §6.1） | 自动合并指示器（见 §5） | `syncing → conflict` |
 | `NetworkError` | `fetch` 抛出 `TypeError` 或 `AbortController` 超时 | 离线 Banner（见 §3） | `syncing → dirty`（进重试队列） |
 | `SessionRevokedError` | 任意需认证端点返回 401 | 强制锁定 + 跳登录 + 对话框（见 §5.2） | `unlocked → locking → locked` |
@@ -406,7 +408,7 @@ WebOtpError (abstract)
 - `OccConflictError(message, serverVersion, serverEncryptedBlob, serverWrappedDekByMaster, options?)`：拦截器从 412 响应体 `{ serverVersion, encryptedBlob, wrappedDekByMaster }`（字段无 `server` 前缀）解析后构造（构造参数有 `server` 前缀，见 §3.2）。
 - `SessionRevokedError(message?, options?)`：401 时以默认消息构造，无需传 response。
 - `ApiError` 子类（`RateLimitError`/`ForbiddenError`/`NotFoundError`/`ConflictError`/`ServerError`）：均以 `(response, ...)` 构造。
-- `CryptoError` 子类（`DecryptionError`/`KdfError`/`EncodingError`）：以 `(message, options?)` 构造，`operation` 字段在子类内部固定。
+- `CryptoError` 子类（`DecryptionError`/`KdfError`/`EncodingError`/`FormatError`）：以 `(message, options?)` 构造，`operation` 字段在子类内部固定（`FormatError` 与 `EncodingError` 同为 `'decode'`）。
 - `NetworkError(message, cause?, statusCode?, options?)`：fetch 抛出 TypeError 时以原始错误为 `cause` 构造。
 
 ---
@@ -546,7 +548,7 @@ WebOtpError (abstract)
 ### 8.2 防抖实现
 
 ```typescript
-// src/lib/state/sync-debounce.ts
+// src/lib/state/vault.svelte.ts（防抖内置于单体同步引擎；见 Design.md §4.3）
 const DEBOUNCE_MS = 500;
 const MAX_WAIT_MS = 3_000;
 

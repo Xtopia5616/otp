@@ -19,7 +19,7 @@
 
 | 层级 | 框架 | 职责边界 | 运行命令 | 覆盖率目标 |
 | :--- | :--- | :--- | :--- | :--- |
-| **单元测试** | vitest | 纯函数：`src/lib/crypto/`（密钥派生、加解密、base32）、`src/lib/otp/`（TOTP/HOTP 计算）、`src/lib/models/merge.ts`（三方合并逻辑）。**零 I/O**，不依赖数据库、网络或浏览器 API。 | `pnpm test:unit` | 行覆盖率 ≥ 95%，分支覆盖率 ≥ 90% |
+| **单元测试** | vitest | 纯函数：`src/lib/crypto/`（密钥派生、加解密、base32）、`src/lib/otp/`（TOTP/HOTP 计算）、`src/lib/state/vault.svelte` 导出的 `mergeAccounts`（三方合并纯函数）。**零 I/O**，不依赖数据库、网络或浏览器 API（`mergeAccounts` 本身为纯函数；其宿主模块 `vault.svelte.ts` 的响应式同步编排由集成/E2E 覆盖，见 Design.md §4.3）。 | `pnpm test:unit` | 行覆盖率 ≥ 95%，分支覆盖率 ≥ 90% |
 | **集成测试** | vitest | API 路由 + Drizzle ORM + 内存 PostgreSQL（推荐 `@testcontainers/postgresql` 或 `pg-mem`）。覆盖认证流程、OCC CAS、反枚举、rotate-key 事务、passkey-wraps CRUD。 | `pnpm test:integration` | 关键路径 100%，错误路径 ≥ 80% |
 | **E2E 测试** | @playwright/test | 关键用户流：注册→解锁→加账户→同步；多设备冲突合并；PRF 绑定+免密解锁；灾难恢复。 | `pnpm test:e2e` | 关键用户流 100% 覆盖 |
 
@@ -66,7 +66,10 @@ export default defineConfig({
     include: ["tests/unit/**/*.test.ts", "tests/integration/**/*.test.ts"],
     coverage: {
       provider: "v8",
-      include: ["src/lib/crypto/**", "src/lib/otp/**", "src/lib/models/merge.ts"],
+      include: ["src/lib/crypto/**", "src/lib/otp/**"],
+      // 注：mergeAccounts 纯函数现内置于 src/lib/state/vault.svelte.ts（单体同步引擎决策，
+      // 见 Design.md §0.3 / §4.3），由 tests/unit/merge/three-way.test.ts 单测覆盖。
+      // vault.svelte.ts 同时含响应式同步编排（由集成/E2E 覆盖），故不纳入下方 95% 文件级阈值。
       thresholds: {
         lines: 95,
         branches: 90,
@@ -856,7 +859,7 @@ describe("LAK 派生", () => {
 ```typescript
 // tests/unit/merge/three-way.test.ts
 import { describe, it, expect } from "vitest";
-import { mergeAccounts } from "$lib/models/merge";
+import { mergeAccounts } from "$lib/state/vault.svelte";
 import type { Account } from "$lib/models/account";
 import { BASE_ACCOUNTS } from "../../fixtures/accounts";
 
