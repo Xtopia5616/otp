@@ -1,0 +1,83 @@
+# .github/workflows/ci.yml — WebOTP CI (Stage 0 §0.14, Engineering §7.3/§9.2)
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 同分支并发时取消旧运行
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck / Lint / Format / Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: webotp
+          POSTGRES_PASSWORD: dev
+          POSTGRES_DB: webotp_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U webotp -d webotp_dev"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://webotp:dev@127.0.0.1:5432/webotp_dev
+      BETTER_AUTH_SECRET: ci-secret-0000000000000000000000000000000000000000000000000000000000
+      BETTER_AUTH_URL: http://localhost:5173
+      SERVER_SECRET: ci-server-secret-000000000000000000000000000000000000000000000000000000
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Sync SvelteKit
+        run: pnpm prepare
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Format check
+        run: pnpm format:check
+
+      - name: Unit tests
+        run: pnpm test:unit
+
+      - name: Integration tests
+        run: pnpm test:integration
+
+      - name: Drizzle push (DB connectivity)
+        run: pnpm db:push
+
+      - name: Circular dependency check
+        run: pnpm madge
+
+      - name: E2E tests
+        run: pnpm test:e2e

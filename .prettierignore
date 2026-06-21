@@ -1,0 +1,15 @@
+# .prettierignore — Prettier 格式化排除清单
+# 文档由 Markdown lint 独立管理，不纳入 Prettier
+docs/
+# 生成文件
+.svelte-kit/
+build/
+node_modules/
+# 锁文件
+pnpm-lock.yaml
+# Drizzle 迁移产物（自动生成 SQL）
+drizzle/
+# 环境变量
+.env
+.env.*
+!.env.example

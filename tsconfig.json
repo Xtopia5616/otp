@@ -1,0 +1,40 @@
+{
+  "extends": "./.svelte-kit/tsconfig.json",
+  "compilerOptions": {
+    // --- 严格模式（Engineering §1.2）---
+    "strict": true,
+    "noUncheckedIndexedAccess": true, // 数组/对象索引访问强制 null 检查
+    "strictNullChecks": true, // 隐含于 strict，显式声明强调
+    "strictFunctionTypes": true, // 隐含于 strict，显式声明强调
+    "noImplicitReturns": true, // 加密函数不允许隐式返回 undefined
+
+    // --- 模块系统（generated 已含，显式对齐文档）---
+    "verbatimModuleSyntax": true, // import type 必须显式标注
+    "module": "ESNext",
+    "moduleResolution": "bundler", // SvelteKit 推荐
+    "target": "ES2022", // 支持 top-level await / structuredClone
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+
+    // --- 路径别名（Engineering §1.2）---
+    // $lib / $server 由 SvelteKit kit.alias 提供（svelte.config.js）。
+    // 不在 tsconfig.json 手动声明 paths，避免与 SvelteKit 自动生成的 tsconfig 冲突。
+
+    // --- 输出 ---
+    "outDir": ".svelte-kit/types",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+
+    // --- 其他 ---
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "isolatedModules": true, // esbuild/Svelte 编译器要求
+    "rewriteRelativeImportExtensions": true,
+    "allowJs": true,
+    "checkJs": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*", "tests/**/*"],
+  "exclude": ["node_modules"]
+}
