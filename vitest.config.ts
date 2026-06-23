@@ -4,7 +4,6 @@ import { defineConfig } from 'vitest/config';
 import { sveltekit } from '@sveltejs/kit/vite';
 
 export default defineConfig({
-  plugins: [sveltekit()],
   test: {
     // passWithNoTests：无测试时正常退出 0（Stage 0 验收要求）
     passWithNoTests: true,
@@ -21,19 +20,25 @@ export default defineConfig({
     },
     // Vitest 4：workspace → projects
     // 不用 extends:true，避免父级 include 合并进子项目
+    // 注：projects 不继承根级 Vite plugins，故 sveltekit()（提供 $lib/$server 别名）
+    // 须在各 project 内显式声明，否则测试中 import '$lib/...' 无法解析。
     projects: [
       {
+        plugins: [sveltekit()],
         test: {
           name: 'unit',
           include: ['tests/unit/**/*.test.ts'],
+          passWithNoTests: true,
         },
       },
       {
+        plugins: [sveltekit()],
         test: {
           name: 'integration',
           include: ['tests/integration/**/*.test.ts'],
           setupFiles: ['tests/integration/setup.ts'],
           pool: 'forks', // 隔离 DB 容器
+          passWithNoTests: true,
         },
       },
     ],
