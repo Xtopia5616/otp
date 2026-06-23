@@ -21,7 +21,7 @@ export abstract class WebOtpError extends Error {
  * 被 StateMachines.md 引用：解锁流程、Blob 解密、RK 验证
  */
 export class CryptoError extends WebOtpError {
-  readonly code = 'CRYPTO_ERROR';
+  readonly code: string = 'CRYPTO_ERROR';
 
   constructor(
     message: string,

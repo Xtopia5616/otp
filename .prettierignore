@@ -5,6 +5,7 @@ docs/
 .svelte-kit/
 build/
 node_modules/
+coverage/
 # 锁文件
 pnpm-lock.yaml
 # Drizzle 迁移产物（自动生成 SQL）
