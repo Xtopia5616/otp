@@ -19,8 +19,14 @@ export function generateRecoveryKey(): string {
   const fullB32 = base32Encode(raw); // 20 字符
   secureWipe(raw); // 擦除原始随机字节（调用方经 parseRecoveryKey 重新取得）
 
-  // 按 4-4-4-4-4 分组用于用户抄写展示
-  return (fullB32.match(/.{4}/g) ?? []).join('-');
+  // 按 4-4-4-4-4 分组用于用户抄写展示。
+  // base32Encode(12 字节) 恒返回 20 字符（96 位 / 5 位每字符向上取整），
+  // 20 整除 4 → 恒 5 组，无需 match 的 null 兜底。
+  const groups: string[] = [];
+  for (let i = 0; i < fullB32.length; i += 4) {
+    groups.push(fullB32.slice(i, i + 4));
+  }
+  return groups.join('-');
 }
 
 /**

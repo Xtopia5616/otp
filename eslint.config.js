@@ -67,6 +67,7 @@ export default ts.config(
       'pnpm-lock.yaml',
       'docs/**',
       'drizzle/**',
+      'coverage/**',
     ],
   },
 );
