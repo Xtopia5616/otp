@@ -19,8 +19,9 @@ import { passkey } from '@better-auth/passkey';
 import { hashPassword } from 'better-auth/crypto';
 import { and, eq, ne } from 'drizzle-orm';
 import { BETTER_AUTH_SECRET, BETTER_AUTH_URL } from '$env/static/private';
+import { NotFoundError } from '$lib/models/errors';
 import { db } from './db';
-import { session, account } from './db/schema';
+import { session, account, passkey as passkeyTable } from './db/schema';
 import * as schema from './db/schema';
 
 /**
@@ -67,9 +68,17 @@ export { hashPassword };
 /**
  * 吊销指定会话（会话管理 UI：DELETE /api/session/:id）。
  * 经 Drizzle 删除 session 行，按 userId 范围限定（用户只能吊销自己的会话）。
+ * 会话不存在/已过期/属他用户 → 0 行删除 → 抛 NotFoundError（路由→404）。
  */
 export async function revokeSession(userId: string, sessionId: string): Promise<void> {
-  await db.delete(session).where(and(eq(session.userId, userId), eq(session.id, sessionId)));
+  // 用户只能吊销自己的会话；按 userId 范围限定。会话不存在/已过期/属他用户 → 0 行 → 404。
+  const deleted = await db
+    .delete(session)
+    .where(and(eq(session.userId, userId), eq(session.id, sessionId)))
+    .returning({ id: session.id });
+  if (deleted.length === 0) {
+    throw new NotFoundError(new Response(null, { status: 404 }));
+  }
 }
 
 /**
@@ -86,6 +95,17 @@ export async function revokeOtherSessions(userId: string, exceptSessionId: strin
  */
 export async function revokeAllSessions(userId: string): Promise<void> {
   await db.delete(session).where(eq(session.userId, userId));
+}
+
+/**
+ * 吊销 BA WebAuthn 凭证（DELETE /api/passkey-wraps/:credentialId 时一并调用）。
+ * 经 Drizzle 删除 passkey 表行（BA 凭证表），使该 Passkey 无法再用于登录。
+ * 幂等：行不存在（已被其他设备删除）→ 0 行删除，不抛错（与 WebOTP passkeyWrap 行分别存储）。
+ */
+export async function revokePasskeyCredential(userId: string, credentialId: string): Promise<void> {
+  await db
+    .delete(passkeyTable)
+    .where(and(eq(passkeyTable.userId, userId), eq(passkeyTable.credentialID, credentialId)));
 }
 
 /**

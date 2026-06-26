@@ -18,7 +18,9 @@ const B64_IV_LEN = 16; // 12 字节 → base64 16 字符
 function parseWrap(s: string): { iv: string; ct: string } {
   const m = /^v=1;iv=([^;]+);ct=(.+)$/.exec(s);
   if (!m) throw new Error(`非法封装串：${s}`);
-  return { iv: m[1]!, ct: m[2]! };
+  const [, iv, ct] = m;
+  if (iv === undefined || ct === undefined) throw new Error(`非法封装串：${s}`);
+  return { iv, ct };
 }
 
 describe('anti-enumeration 伪参数形状一致性', () => {
@@ -27,7 +29,8 @@ describe('anti-enumeration 伪参数形状一致性', () => {
   beforeEach(async () => {
     const id = await seedUser(); // 默认 KDF 65536/3/4，prfSalt=null
     const [u] = await db.select({ email: user.email }).from(user).where(eq(user.id, id));
-    realEmail = u!.email;
+    if (!u) throw new Error('seed user 查询缺失');
+    realEmail = u.email;
     await initVault(id, {
       wrappedDekByMaster: 'v=1;iv=AAAAAAAAAAAAAAAA;ct=master0',
       wrappedDekByRecovery: 'v=1;iv=AAAAAAAAAAAAAAAA;ct=recovery0',
@@ -57,17 +60,18 @@ describe('anti-enumeration 伪参数形状一致性', () => {
 
     it('与真实 AuthParamsResponse 逐字段形状一致（字段名/类型/base64 长度）', async () => {
       const real = await getAuthParamsByEmail(realEmail);
+      if (!real) throw new Error('real auth params 缺失');
       const pseudo = derivePseudoAuthParams('nonexistent@example.com');
       // 字段集合相同
-      expect(Object.keys(real!).sort()).toEqual(Object.keys(pseudo).sort());
+      expect(Object.keys(real).sort()).toEqual(Object.keys(pseudo).sort());
       // 类型相同
-      expect(typeof real!.kdfAlgo).toBe(typeof pseudo.kdfAlgo);
-      expect(typeof real!.kdfMemoryKiB).toBe(typeof pseudo.kdfMemoryKiB);
-      expect(typeof real!.loginSalt).toBe(typeof pseudo.loginSalt);
-      expect(typeof real!.prfSalt).toBe(typeof pseudo.prfSalt); // 均 null（未绑定 Passkey）
+      expect(typeof real.kdfAlgo).toBe(typeof pseudo.kdfAlgo);
+      expect(typeof real.kdfMemoryKiB).toBe(typeof pseudo.kdfMemoryKiB);
+      expect(typeof real.loginSalt).toBe(typeof pseudo.loginSalt);
+      expect(typeof real.prfSalt).toBe(typeof pseudo.prfSalt); // 均 null（未绑定 Passkey）
       // base64 长度相同
-      expect(real!.loginSalt).toHaveLength(pseudo.loginSalt.length);
-      expect(real!.kdfSalt).toHaveLength(pseudo.kdfSalt.length);
+      expect(real.loginSalt).toHaveLength(pseudo.loginSalt.length);
+      expect(real.kdfSalt).toHaveLength(pseudo.kdfSalt.length);
     });
 
     it('确定性：同一 email 恒得同一输出', () => {
@@ -118,19 +122,20 @@ describe('anti-enumeration 伪参数形状一致性', () => {
 
     it('与真实 RecoverInitResponse 逐字段形状一致（字段名/类型/盐长度/封装格式）', async () => {
       const real = await getRecoverMaterial(realEmail);
+      if (!real) throw new Error('real recover material 缺失');
       const pseudo = derivePseudoRecoveryMaterial('nonexistent@example.com');
       // 字段集合相同
-      expect(Object.keys(real!).sort()).toEqual(Object.keys(pseudo).sort());
+      expect(Object.keys(real).sort()).toEqual(Object.keys(pseudo).sort());
       // 类型相同
-      expect(typeof real!.recoverySalt).toBe(typeof pseudo.recoverySalt);
-      expect(typeof real!.wrappedDekByRecovery).toBe(typeof pseudo.wrappedDekByRecovery);
-      expect(typeof real!.encryptedBlob).toBe(typeof pseudo.encryptedBlob);
+      expect(typeof real.recoverySalt).toBe(typeof pseudo.recoverySalt);
+      expect(typeof real.wrappedDekByRecovery).toBe(typeof pseudo.wrappedDekByRecovery);
+      expect(typeof real.encryptedBlob).toBe(typeof pseudo.encryptedBlob);
       // 盐长度相同
-      expect(real!.recoverySalt).toHaveLength(pseudo.recoverySalt.length);
-      expect(real!.recoveryVerifierSalt).toHaveLength(pseudo.recoveryVerifierSalt.length);
+      expect(real.recoverySalt).toHaveLength(pseudo.recoverySalt.length);
+      expect(real.recoveryVerifierSalt).toHaveLength(pseudo.recoveryVerifierSalt.length);
       // 封装格式相同（均合法 v=1;iv=...;ct=...）
-      expect(() => parseWrap(real!.wrappedDekByRecovery)).not.toThrow();
-      expect(() => parseWrap(real!.encryptedBlob)).not.toThrow();
+      expect(() => parseWrap(real.wrappedDekByRecovery)).not.toThrow();
+      expect(() => parseWrap(real.encryptedBlob)).not.toThrow();
       expect(() => parseWrap(pseudo.wrappedDekByRecovery)).not.toThrow();
       expect(() => parseWrap(pseudo.encryptedBlob)).not.toThrow();
     });

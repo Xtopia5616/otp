@@ -3,7 +3,7 @@
 import '$server-only';
 import { and, eq, sql } from 'drizzle-orm';
 
-import { OccConflictError } from '$lib/models/errors';
+import { OccConflictError, ConflictError } from '$lib/models/errors';
 import type { VaultCreateRequest, VaultCreateResponse, VaultResponse } from '$lib/models/vault';
 import type { RotateKeyRequest } from '$lib/models/api';
 
@@ -19,12 +19,25 @@ export async function initVault(
   userId: string,
   req: VaultCreateRequest,
 ): Promise<VaultCreateResponse> {
-  await db.insert(vault).values({
-    userId,
-    wrappedDekByMaster: req.wrappedDekByMaster,
-    wrappedDekByRecovery: req.wrappedDekByRecovery,
-    encryptedBlob: req.encryptedBlob,
-  });
+  try {
+    await db.insert(vault).values({
+      userId,
+      wrappedDekByMaster: req.wrappedDekByMaster,
+      wrappedDekByRecovery: req.wrappedDekByRecovery,
+      encryptedBlob: req.encryptedBlob,
+    });
+  } catch (e) {
+    // vault.userId 为 PK：重复初始化（重复注册）→ PG 23505。
+    // drizzle-orm 0.45 将 pg 错误包装为 DrizzleQueryError，PG code 位于 .cause.code。
+    const code =
+      typeof e === 'object' && e !== null && 'cause' in e
+        ? (e as { cause?: { code?: string } }).cause?.code
+        : (e as { code?: string }).code;
+    if (code === '23505') {
+      throw new ConflictError(new Response(null, { status: 409 }), { cause: e });
+    }
+    throw e;
+  }
   return { version: 1 };
 }
 

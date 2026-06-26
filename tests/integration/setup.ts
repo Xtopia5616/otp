@@ -15,7 +15,7 @@ import { afterAll, beforeAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('集成测试需要 DATABASE_URL');
+if (DATABASE_URL === undefined || DATABASE_URL === '') throw new Error('集成测试需要 DATABASE_URL');
 
 const TEST_SCHEMA = 'webotp_test';
 

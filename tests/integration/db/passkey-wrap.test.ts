@@ -44,8 +44,8 @@ describe('passkey_wrap CRUD', () => {
 
   it('多设备多 Passkey 共存（同用户多个 credentialId 各一行）', async () => {
     const cs = [cred(10), cred(11), cred(12)];
-    for (let i = 0; i < cs.length; i++) {
-      await createPasskeyWrap(userId, { credentialId: cs[i]!, wrappedDekByPrf: wrap(10 + i) });
+    for (const [i, credentialId] of cs.entries()) {
+      await createPasskeyWrap(userId, { credentialId, wrappedDekByPrf: wrap(10 + i) });
     }
     const rows = await listPasskeyWraps(userId);
     expect(rows).toHaveLength(cs.length);

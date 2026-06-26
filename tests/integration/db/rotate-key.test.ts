@@ -23,6 +23,8 @@ describe('rotateMasterPassword 事务', () => {
 
   it('事务提交后：account.password + loginSalt/kdfSalt + wrappedDekByMaster 全部更新', async () => {
     const sessions = await seedSessions(userId, 3);
+    const keepSessionId = sessions[0];
+    if (keepSessionId === undefined) throw new Error('seeded sessions 缺失');
 
     await rotateMasterPassword(
       userId,
@@ -32,7 +34,7 @@ describe('rotateMasterPassword 事务', () => {
         newKdfSalt: 'new-kdfSalt',
         newWrappedDekByMaster: 'v=1;iv=AAAAAAAAAAAAAAAA;ct=masterNew',
       },
-      sessions[0]!, // 保留当前会话
+      keepSessionId, // 保留当前会话
     );
 
     // account.password 更新为 newLak 的服务端哈希（hashPassword），非明文
@@ -40,8 +42,9 @@ describe('rotateMasterPassword 事务', () => {
       .select({ password: account.password })
       .from(account)
       .where(eq(account.userId, userId));
-    expect(await verifyPassword({ hash: acct!.password!, password: 'new-lak' })).toBe(true);
-    expect(await verifyPassword({ hash: acct!.password!, password: 'old-lak' })).toBe(false);
+    if (!acct || acct.password === null) throw new Error('account password 行缺失');
+    expect(await verifyPassword({ hash: acct.password, password: 'new-lak' })).toBe(true);
+    expect(await verifyPassword({ hash: acct.password, password: 'old-lak' })).toBe(false);
 
     // user 盐更新
     const [u] = await db
@@ -58,17 +61,19 @@ describe('rotateMasterPassword 事务', () => {
 
   it('事务后 revokeOtherSessions 被调：除当前会话外全部删除', async () => {
     const sessions = await seedSessions(userId, 3);
+    const keepSessionId2 = sessions[1];
+    if (keepSessionId2 === undefined) throw new Error('seeded sessions 缺失');
     await rotateMasterPassword(
       userId,
       { newLak: 'x', newLoginSalt: 's', newKdfSalt: 'k', newWrappedDekByMaster: 'm' },
-      sessions[1]!,
+      keepSessionId2,
     );
     const remaining = await db
       .select({ id: session.id })
       .from(session)
       .where(eq(session.userId, userId));
     expect(remaining).toHaveLength(1);
-    expect(remaining[0]?.id).toBe(sessions[1]);
+    expect(remaining[0]?.id).toBe(keepSessionId2);
   });
 
   it('Blob / version / wrappedDekByRecovery 不变（DEK 恒定）', async () => {

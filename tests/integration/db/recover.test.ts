@@ -23,7 +23,8 @@ describe('recover 查询与重置事务', () => {
     userId = await seedUser();
     // seedUser 不返回 email，按 id 约定回查
     const [u] = await db.select({ email: user.email }).from(user).where(eq(user.id, userId));
-    email = u!.email;
+    if (!u) throw new Error('seed user 查询缺失');
+    email = u.email;
     await initVault(userId, {
       wrappedDekByMaster: MASTER0,
       wrappedDekByRecovery: RECOVERY0,
@@ -34,16 +35,17 @@ describe('recover 查询与重置事务', () => {
   it('getRecoverMaterial 存在邮箱返回完整 RecoverInitResponse 形状（不含 recoveryVerifier）', async () => {
     const m = await getRecoverMaterial(email);
     expect(m).not.toBeNull();
-    expect(m!.kdfAlgo).toBe('argon2id');
-    expect(m!.kdfMemoryKiB).toBe(65536);
-    expect(m!.kdfIterations).toBe(3);
-    expect(m!.kdfParallelism).toBe(4);
-    expect(m!.recoverySalt).toBe('IjNEVWZ3iJmqu8zd7v8AEQ==');
-    expect(m!.recoveryVerifierSalt).toBe('M0RVZneImaq7zN3u/wARIg==');
-    expect(m!.wrappedDekByRecovery).toBe(RECOVERY0);
-    expect(m!.encryptedBlob).toBe(BLOB0);
+    if (!m) throw new Error('getRecoverMaterial 返回 null');
+    expect(m.kdfAlgo).toBe('argon2id');
+    expect(m.kdfMemoryKiB).toBe(65536);
+    expect(m.kdfIterations).toBe(3);
+    expect(m.kdfParallelism).toBe(4);
+    expect(m.recoverySalt).toBe('IjNEVWZ3iJmqu8zd7v8AEQ==');
+    expect(m.recoveryVerifierSalt).toBe('M0RVZneImaq7zN3u/wARIg==');
+    expect(m.wrappedDekByRecovery).toBe(RECOVERY0);
+    expect(m.encryptedBlob).toBe(BLOB0);
     // 机密字段不外泄
-    expect('recoveryVerifier' in m!).toBe(false);
+    expect('recoveryVerifier' in m).toBe(false);
   });
 
   it('getRecoverMaterial 不存在邮箱返回 null', async () => {
@@ -53,8 +55,9 @@ describe('recover 查询与重置事务', () => {
   it('getRecoveryAuthContext 存在返回 userId + recoveryVerifier', async () => {
     const ctx = await getRecoveryAuthContext(email);
     expect(ctx).not.toBeNull();
-    expect(ctx!.userId).toBe(userId);
-    expect(ctx!.recoveryVerifier).toBe('RFVmd4iZqrvM3e7/ABEiMw==');
+    if (!ctx) throw new Error('getRecoveryAuthContext 返回 null');
+    expect(ctx.userId).toBe(userId);
+    expect(ctx.recoveryVerifier).toBe('RFVmd4iZqrvM3e7/ABEiMw==');
   });
 
   it('getRecoveryAuthContext 不存在返回 null', async () => {
@@ -86,8 +89,9 @@ describe('recover 查询与重置事务', () => {
       .select({ password: account.password })
       .from(account)
       .where(eq(account.userId, userId));
-    expect(await verifyPassword({ hash: acct!.password!, password: 'new-lak' })).toBe(true);
-    expect(await verifyPassword({ hash: acct!.password!, password: 'old-lak' })).toBe(false);
+    if (!acct || acct.password === null) throw new Error('account password 行缺失');
+    expect(await verifyPassword({ hash: acct.password, password: 'new-lak' })).toBe(true);
+    expect(await verifyPassword({ hash: acct.password, password: 'old-lak' })).toBe(false);
 
     // user：MP 盐 + 全部 RK 材料更新
     const [u] = await db
