@@ -2,6 +2,7 @@
 // 双项目：unit（纯函数）+ integration（forks 隔离 DB）
 import { defineConfig } from 'vitest/config';
 import { sveltekit } from '@sveltejs/kit/vite';
+import { resolve } from 'node:path';
 
 export default defineConfig({
   test: {
@@ -33,11 +34,20 @@ export default defineConfig({
       },
       {
         plugins: [sveltekit()],
+        // `$server-only` 在 vitest 运行时无虚拟模块（sveltekit 插件仅 dev/build 提供），
+        // 别名到空桩使 server/ 模块在测试进程内可求值。
+        resolve: { alias: { '$server-only': resolve('./tests/fixtures/server-only-stub.ts') } },
         test: {
           name: 'integration',
           include: ['tests/integration/**/*.test.ts'],
           setupFiles: ['tests/integration/setup.ts'],
-          pool: 'forks', // 隔离 DB 容器
+          pool: 'forks', // 隔离 DB 进程
+          // 串行执行测试文件：集成测试共享远程 PG 的 webotp_test schema，
+          // 并发会争用同一 schema（DROP/CREATE 竞态）。Vitest 4 以 fileParallelism 替代 singleFork。
+          fileParallelism: false,
+          // DATABASE_SCHEMA 使 db/index.ts 连接设 search_path=webotp_test（隔离 schema）。
+          // 在模块求值前注入，避免 setup 顶层 import 的 hoisting 竞态。
+          env: { DATABASE_SCHEMA: 'webotp_test' },
           passWithNoTests: true,
         },
       },

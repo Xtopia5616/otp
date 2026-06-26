@@ -336,7 +336,7 @@ graph TD
 | 职责 | schema 定义（纯表结构 + 类型，**不含查询**——Engineering §8.1）+ 查询函数（CAS/事务/CRUD）。 |
 | 内部文件 | `index.ts`（drizzle 实例 + 连接，`import '$server-only'`）、`migrate.ts`、`schema/index.ts`、`schema/user.ts`、`schema/vault.ts`、`schema/passkey-wrap.ts`、查询文件 `user.ts`、`vault.ts`、`passkey-wrap.ts`、`recover.ts`、`session.ts` |
 | schema 契约 | `user`/`vault`/`passkeyWrap` 三表，字段与列名映射严格遵循 Architecture §4 + Engineering §3.2（camelCase 字段 ↔ snake_case 列） |
-| 查询公共 API 契约（概要） | `vault.ts`：`initVault(userId, req: VaultCreateRequest) → Promise<{version:1}>`、`getVault(userId) → Promise<VaultResponse>`、`updateVaultBlob(userId, expectedVersion, encryptedBlob) → Promise<number>`（**CAS**：`UPDATE ... SET version=version+1 WHERE version=expectedVersion`；影响 0 行→查当前行抛 `OccConflictError` 携 `serverVersion`/`serverEncryptedBlob`/`serverWrappedDekByMaster`）、`rotateWrappedDekByMaster(userId, newWrapped) → Promise<void>`<br>`user.ts`：`getAuthParamsByEmail(userId) → AuthParamsResponse`、`updateUserSaltsAndKdf(userId, {loginSalt, kdfSalt}) → Promise<void>`、`updateRecoveryMaterial(userId, fields) → Promise<void>`<br>`passkey-wrap.ts`：`listPasskeyWraps(userId)`、`createPasskeyWrap(userId, req)`（`credentialId` 唯一冲突→`ConflictError`）、`deletePasskeyWrap(userId, credentialId)`（不存在→`NotFoundError`）<br>`recover.ts`：`getRecoveryMaterial(email) → RecoverInitResponse | null`、`resetRecovery(email, req: RecoverResetRequest) → Promise<void>`（**单事务**：常量时间校验 `recoveryVerifier` → 更新 BA 密码哈希 + `login_salt`/`kdf_salt`/`wrapped_dek_by_master`/`wrapped_dek_by_recovery`/`recovery_salt`/`recovery_verifier_salt`/`recovery_verifier` → 调 `server/auth.revokeAllSessions`）<br>`session.ts`：薄封装，吊销委托 `server/auth` |
+| 查询公共 API 契约（概要） | `vault.ts`：`initVault(userId, req: VaultCreateRequest) → Promise<{version:1}>`、`getVault(userId) → Promise<VaultResponse>`、`updateVaultBlob(userId, expectedVersion, encryptedBlob) → Promise<number>`（**CAS**：`UPDATE ... SET version=version+1 WHERE version=expectedVersion`；影响 0 行→查当前行抛 `OccConflictError` 携 `serverVersion`/`serverEncryptedBlob`/`serverWrappedDekByMaster`）、`rotateWrappedDekByMaster(userId, newWrapped) → Promise<void>`<br>`user.ts`：`getAuthParamsByEmail(email) → Promise<AuthParamsResponse | null>`（不存在邮箱返回 null，路由据此走反枚举伪参数）、`updateUserSaltsAndKdf(userId, {loginSalt, kdfSalt}) → Promise<void>`、`updateRecoveryMaterial(userId, fields) → Promise<void>`<br>`passkey-wrap.ts`：`listPasskeyWraps(userId)`、`createPasskeyWrap(userId, req)`（`credentialId` 唯一冲突→`ConflictError`）、`deletePasskeyWrap(userId, credentialId)`（不存在→`NotFoundError`）<br>`recover.ts`：`getRecoverMaterial(email) → RecoverInitResponse | null`、`getRecoveryAuthContext(email) → {userId, recoveryVerifier} | null`、`resetRecovery(userId, req: RecoverResetRequest) → Promise<void>`（**单事务**：更新 BA 密码哈希 + `login_salt`/`kdf_salt`/`wrapped_dek_by_master`/`wrapped_dek_by_recovery`/`recovery_salt`/`recovery_verifier_salt`/`recovery_verifier` → 事务提交后调 `revokeAllSessions`；常量时间 `recoveryVerifier` 校验由路由层 `constant-time.safeEqualVerifier` 完成后传入 userId）<br>`session.ts`：薄封装，吊销委托 `server/auth` |
 | 事务规则 | `PUT /api/vault`（Blob）单条 CAS UPDATE 原子，不用显式事务；`rotate-key`/`recover/reset` **必须** `db.transaction()`（Engineering §8.3）；`passkey-wraps` 单行 CRUD 不需事务 |
 | 依赖 | drizzle-orm、`schema/`、`models/`（`OccConflictError`/`ConflictError`/`NotFoundError`/API 类型）、`server/auth`（rotate/reset 内调 BA 会话吊销 API） |
 | 错误契约 | OCC 冲突抛 `OccConflictError`；`credentialId` 重复抛 `ConflictError`；行不存在抛 `NotFoundError` |
@@ -351,6 +351,7 @@ graph TD
 | 依赖 | better-auth、@better-auth/passkey、`server/db`（schema + `db/index` 连接实例，配置 Drizzle adapter；**不 import 查询文件**，防环）、`$env/static/private`（`BETTER_AUTH_SECRET`） |
 | 集成要点 | Better Auth 的 passkey 创建/断言选项需叠加 PRF `extensions.prf.eval`——客户端 `webauthn/createPasskeyWithPrf` 接收 BA 基础选项后注入；断言后 `clientExtensionResults.prf.results.first(prfSalt)` 取 `$PRF_{out}$` |
 | 关联架构 | §2 技术栈、§7.1/§7.2/§7.5、§8.2/§8.3/§8.5 |
+> **会话吊销与密码哈希实现（已校正）**：BA 的 `revokeOtherSessions`/`revokeSessions` 端点 `requireHeaders`（需当前会话上下文），无法在无会话的 `recover/reset` 流程或事务提交后调用。故 `revokeOtherSessions`/`revokeAllSessions`/`revokeSession` **经 Drizzle 直接删除 `session` 表行**实现（按 userId 范围限定）。密码哈希：BA API 用独立 DB 连接、无法加入 Drizzle 事务，故 `rotate-key`/`recover-reset` 事务内改用 `hashPassword(newLak)` + tx 直写 `account.password`（`providerId='credential'`）；`updatePasswordHash` 为非事务独立变体。`rotateMasterPassword`/`resetRecovery` 自身负责事务提交后调 `revoke*`（使 db 层测试可验证 revoke 被调），路由层不再单独吊销。
 
 ### 5.3 `server/anti-enumeration.ts` — 反枚举伪参数
 
@@ -396,19 +397,19 @@ graph TD
 | `routes/api/vault/+server.ts` | GET | BA 会话 | `server/db/vault` | 200 `VaultResponse` | 401 |
 | `routes/api/vault/+server.ts` | POST | BA 会话 | `server/db/vault` | 201 `{version:1}` | 401/409 |
 | `routes/api/vault/+server.ts` | PUT | BA 会话 | `server/db/vault`（CAS） | 200 `{version}` | 401/412 |
-| `routes/api/vault/rotate-key/+server.ts` | POST | BA 会话 | `server/db/vault`（事务）+ `server/auth.revokeOtherSessions` | 200 | 401 |
+| `routes/api/vault/rotate-key/+server.ts` | POST | BA 会话 | `server/db/vault`（事务，内含 `revokeOtherSessions`） | 200 | 401 |
 | `routes/api/passkey-wraps/+server.ts` | GET | BA 会话 | `server/db/passkey-wrap` | 200 `PasskeyWrapRow[]` | 401 |
 | `routes/api/passkey-wraps/+server.ts` | POST | BA 会话 | `server/db/passkey-wrap` | 201 `PasskeyWrapRow` | 401/409 |
 | `routes/api/passkey-wraps/[credentialId]/+server.ts` | DELETE | BA 会话 | `server/db/passkey-wrap` + `server/auth`（吊销 BA 凭证） | 200 | 401/404 |
 | `routes/api/vault/recover/init/+server.ts` | POST | 无会话+限流 | `server/rate-limit` + `server/anti-enumeration`（不存在邮箱）+ `server/db/recover` | 200 `RecoverInitResponse` | 429 |
-| `routes/api/vault/recover/reset/+server.ts` | POST | 无会话+限流 | `server/rate-limit` + `server/constant-time` + `server/db/recover`（事务）+ `server/auth.revokeAllSessions` | 200 | 403/429 |
+| `routes/api/vault/recover/reset/+server.ts` | POST | 无会话+限流 | `server/rate-limit` + `server/constant-time` + `server/db/recover`（事务，内含 `revokeAllSessions`） | 200 | 403/429 |
 | `routes/api/session/[id]/+server.ts` | DELETE | BA 会话 | `server/auth` | 200 | 401/404 |
 
 ### 6.2 三个复杂处理器的额外约定
 
 - **`PUT /api/vault`（CAS）**：`expectedVersion` 来自请求体；`updateVaultBlob` 返回新 `version`；0 行影响由 `server/db/vault` 抛 `OccConflictError`，路由层捕获并响应 412 + `VaultConflictResponse`（`{serverVersion, encryptedBlob, wrappedDekByMaster}`，**不含** `wrappedDekByRecovery`/passkey 行——Architecture §9.1）。
-- **`POST /api/vault/rotate-key`**：路由层调 `rotateMasterPassword` 事务（更新 BA 密码哈希 + `login_salt`/`kdf_salt` + `wrappedDekByMaster`），**事务提交后**调 `server/auth.revokeOtherSessions(userId, currentSessionId)`（非事务内）。Blob/version/`wrappedDekByRecovery`/passkey 行不动（§8.2）。
-- **`POST /api/vault/recover/reset`**：路由层先 `rate-limit.checkAndConsume`，再 `server/constant-time.safeEqualVerifier(提交 recoveryVerifier, 存储)`，失败→403；通过→`resetRecovery` 单事务更新全部 MP/RK 字段 + `revokeAllSessions`。$DEK$ 与 Blob 不变。
+- **`POST /api/vault/rotate-key`**：路由层调 `rotateMasterPassword(userId, params, currentSessionId)`——单 `db.transaction` 内 `hashPassword(newLak)` 直写 `account.password` + 更新 `login_salt`/`kdf_salt` + `wrappedDekByMaster`，**事务提交后**由 `rotateMasterPassword` 自身调 `revokeOtherSessions(userId, currentSessionId)`（非事务内，使 db 层测试可验证吊销被调）。Blob/version/`wrappedDekByRecovery`/passkey 行不动（§8.2）。
+- **`POST /api/vault/recover/reset`**：路由层先 `rate-limit.checkAndConsume`，再 `getRecoveryAuthContext(email)` 取 userId + 存储 `recoveryVerifier`，经 `server/constant-time.safeEqualVerifier(提交, 存储)` 校验，失败→403（不泄露用户存在性）；通过→`resetRecovery(userId, req)` 单事务更新全部 MP/RK 字段，**事务提交后**由 `resetRecovery` 自身调 `revokeAllSessions(userId)`。$DEK$ 与 Blob 不变。
 
 ---
 

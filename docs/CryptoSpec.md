@@ -258,7 +258,7 @@ async function importKEK(rawKek: Uint8Array): Promise<CryptoKey> {
  * 注册时生成随机 DEK 并导入为不可导出的 CryptoKey。
  * DEK 一旦生成永不更换（见 Architecture.md §3.1）。
  *
- * @returns CryptoKey（AES-GCM-256, extractable: false, encrypt/decrypt 用途）
+ * @returns CryptoKey（AES-GCM-256, extractable: true, encrypt/decrypt 用途）
  */
 async function generateDEK(): Promise<CryptoKey> {
   const rawDek = new Uint8Array(32); // 256 位
@@ -268,7 +268,7 @@ async function generateDEK(): Promise<CryptoKey> {
     'raw',
     rawDek,
     { name: 'AES-GCM', length: 256 },
-    false,                              // extractable: false
+    true,                               // extractable: true（wrapKey 内部需 exportKey，见 §3.4 校正）
     ['encrypt', 'decrypt'],             // 用于加解密 Blob
   );
 
@@ -281,21 +281,22 @@ async function generateDEK(): Promise<CryptoKey> {
 ### 3.4 wrapKey / unwrapKey vs 手动 encrypt/decrypt
 
 **选择 `wrapKey`/`unwrapKey` 而非手动 `encrypt`/`decrypt`**，理由如下：
+> **实现校正**：SubtleCrypto `wrapKey('raw', dek, kek)` 内部调用 `exportKey`，对 `extractable: false` 的 DEK 会抛 `InvalidAccessError`。故 DEK 须 `extractable: true`（`generateDEK` 与 `unwrapDek` 均如此）；但 `wrapKey` 在运行时内原子完成导出+加密，应用代码从不显式 `exportKey`，raw 字节不暴露给 JS。KEK 仍 `extractable: false`。
 
 | 维度 | `wrapKey`/`unwrapKey` | 手动 `encrypt`/`decrypt` |
 | :--- | :--- | :--- |
 | **API 语义** | 专为密钥包装设计，输出为单一 ArrayBuffer（含 tag） | 需先 `exportKey` 再 `encrypt`，多一步暴露明文密钥 |
 | **安全性** | DEK 的原始字节**永不经过 JS 内存**——`wrapKey` 直接在内部完成导出+加密 | 必须先 `exportKey('raw', dek)` 得到 `rawDek`（要求 `extractable: true`），引入不必要的密钥暴露窗口 |
-| **extractable** | KEK 和 DEK 均可保持 `extractable: false` | DEK 必须设为 `extractable: true` 才能导出 |
+| **extractable** | DEK 须 `extractable: true`（`wrapKey` 内部 `exportKey`，不可导出密钥抛 `InvalidAccessError`）；KEK 保持 `extractable: false` | DEK 须 `extractable: true` |
 | **AEAD 保证** | 同样产生 128 位 tag，与 AES-GCM-256 一致 | 同 |
 
-**结论**：DEK 包装统一使用 `wrapKey`/`unwrapKey`，DEK 始终 `extractable: false`。
+**结论**：DEK 包装统一使用 `wrapKey`/`unwrapKey`。由于 `wrapKey` 内部调用 `exportKey`，**DEK 须 `extractable: true`**（`generateDEK`/`unwrapDek` 均如此）；`wrapKey` 在运行时内原子完成导出+加密，应用代码从不显式 `exportKey`，故 raw 字节不暴露给 JS。KEK 保持 `extractable: false`。
 
 ```typescript
 /**
  * 用 KEK 包装 DEK，返回密文封装格式字符串。
  *
- * @param dek - 待包装的 DEK（CryptoKey, extractable: false）
+ * @param dek - 待包装的 DEK（CryptoKey, extractable: true）
  * @param kek - 用于包装的 KEK（CryptoKey, extractable: false）
  * @returns   - "v=1;iv=<base64>;ct=<base64>" 格式字符串
  */
@@ -315,7 +316,7 @@ async function wrapDek(dek: CryptoKey, kek: CryptoKey): Promise<string> {
  *
  * @param wrapped - "v=1;iv=<base64>;ct=<base64>" 格式字符串
  * @param kek     - 用于解包的 KEK（CryptoKey, extractable: false）
- * @returns       - 解包后的 DEK（CryptoKey, extractable: false）
+ * @returns       - 解包后的 DEK（CryptoKey, extractable: true，供 re-wrap）
  * @throws        - AEAD 校验失败时抛出 DecryptionError；格式错误抛出 FormatError
  */
 async function unwrapDek(wrapped: string, kek: CryptoKey): Promise<CryptoKey> {
@@ -329,7 +330,7 @@ async function unwrapDek(wrapped: string, kek: CryptoKey): Promise<CryptoKey> {
       kek,                    // 解包密钥
       { name: 'AES-GCM', iv, tagLength: 128 },
       { name: 'AES-GCM', length: 256 },  // 导入后的密钥算法
-      false,                  // extractable: false
+      true,                   // extractable: true（re-wrap 需要，见 §3.4 结论）
       ['encrypt', 'decrypt'], // 用途
     );
   } catch (e) {
@@ -443,8 +444,10 @@ function parseEncryptedPayload(encoded: string): ParsedEncryptedPayload {
     throw new FormatError('invalid envelope format: missing version prefix');
   }
   const version = parseInt(vPart!.slice(2), 10);
-  if (isNaN(version) || version < 1) {
-    throw new FormatError(`invalid envelope version: ${vPart!.slice(2)}`);
+  // 实现从严：仅接受 v=1（当前唯一版本）。原 `version < 1` 宽松校验已收紧为 `version !== 1`，
+  // 在解析层即拒绝未知版本，避免调用方遗漏二次校验（见 src/lib/crypto/encoding.ts parseBlob）。
+  if (isNaN(version) || version !== 1) {
+    throw new FormatError(`unsupported envelope version: ${vPart!.slice(2)}`);
   }
 
   // 3. IV 解析
@@ -720,13 +723,13 @@ const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
  *
  * @param input - base32 编码字符串
  * @returns     - 解码后的字节数组
- * @throws      - 遇到非法字符时抛出 Error
+ * @throws      - 空串或非法字符时抛出 EncodingError（实现从严：空串不返回空数组）
  */
 function base32Decode(input: string): Uint8Array {
   // 1. 规范化
   const cleaned = input.replace(/[\s-]/g, '').toUpperCase().replace(/=+$/, '');
 
-  if (cleaned.length === 0) return new Uint8Array(0);
+  if (cleaned.length === 0) throw new EncodingError('base32 decode failed: empty input');
 
   // 2. 验证字符集
   for (let i = 0; i < cleaned.length; i++) {
@@ -824,8 +827,8 @@ function parseRecoveryKey(input: string): Uint8Array {
 
 ### 7.4 base32 解码失败处理
 
-- 遇到非法字符（非 `A-Z2-7`、非空白/连字符/填充）→ 抛出 `Error`，消息包含非法字符位置。
-- 空字符串 → 返回空 `Uint8Array`（调用方应额外校验长度）。
+- 遇到非法字符（非 `A-Z2-7`、非空白/连字符/填充）→ 抛出 `EncodingError`，消息包含非法字符位置。
+- 空字符串 → 抛出 `EncodingError`（**不返回空数组**）。实现从严：空串在解析层即报错，避免调用方遗漏长度校验导致 HMAC 使用空密钥（见 src/lib/crypto/encoding.ts）。
 - **绝不返回空种子**：解码失败必须显式报错，否则 HMAC 使用空密钥会导致所有 TOTP 码相同（见 Architecture.md §5.2）。
 
 ---
@@ -941,21 +944,22 @@ DT(hmacResult: Uint8Array): number {
 
 ### 10.4 TOTP 实现
 > **模块契约（权威）**：`otp/` 模块内部函数遵循**抛错语义**——签名 `Promise<string>`，失败时抛 `CryptoError` 子类（`EncodingError`，base32 解码失败等）。此为模块的权威返回约定，与 [Engineering.md](./Engineering.md) §6.3 一致。`Result<T, E>` 模式作为**调用侧可选**包装工具（由调用方将 `Promise` 转为 `Result`），不作为 `otp/` 模块契约的一部分。
+> **实现校正（secret 类型）**：`generateHOTP`/`generateTOTP` 的 `secret` 参数为 `Uint8Array`（原始字节），而非 base32 字符串。base32 解码职责上移至调用方——state 层 `base32Decode(Account.secret)` 与 `parseOtpauthUri`（otp/ 内）负责解码。故 `generateHOTP` 不内部 `base32Decode`、不 `secureWipe` 输入（输入由调用方持有，`verifyTOTP` 窗口循环复用同一数组）。算法（HMAC→动态截断→模 10^digits→零填充）不变。权威依据：Stage03 任务定义 + Testing §3 测试向量（`TextEncoder.encode(...)` 传原始字节）。
 
 ```typescript
 /**
  * 计算 TOTP 验证码。
  *
- * @param secret    - base32 编码的共享密钥
+ * @param secret    - 原始字节共享密钥（Uint8Array；base32 解码由调用方/parseOtpauthUri 完成）
  * @param algorithm - HMAC 算法（"SHA1" | "SHA256" | "SHA512"）
  * @param digits    - 验证码位数（6 或 8）
  * @param period    - TOTP 步长（秒），默认 30
  * @param time      - 当前时间（epoch 秒），默认 Date.now() / 1000
  * @returns         - 零填充的数字验证码字符串（如 "012345"）
- * @throws          - base32 解码失败
+ * @throws          - 无（合法 Uint8Array 输入永不失败；secret 长度合法性由调用方保证）
  */
 async function generateTOTP(
-  secret: string,
+  secret: Uint8Array,
   algorithm: 'SHA1' | 'SHA256' | 'SHA512',
   digits: 6 | 8,
   period: number = 30,
@@ -971,21 +975,21 @@ async function generateTOTP(
 /**
  * 计算 HOTP 验证码。
  *
- * @param secret    - base32 编码的共享密钥
+ * @param secret    - 原始字节共享密钥（Uint8Array；base32 解码由调用方/parseOtpauthUri 完成）
  * @param algorithm - HMAC 算法（"SHA1" | "SHA256" | "SHA512"）
  * @param digits    - 验证码位数（6 或 8）
  * @param counter   - HOTP 计数器（bigint）
  * @returns         - 零填充的数字验证码字符串
- * @throws          - base32 解码失败
+ * @throws          - 无（合法 Uint8Array 输入永不失败；secret 长度合法性由调用方保证）
  */
 async function generateHOTP(
-  secret: string,
+  secret: Uint8Array,
   algorithm: 'SHA1' | 'SHA256' | 'SHA512',
   digits: 6 | 8,
   counter: bigint,
 ): Promise<string> {
-  // 1. base32 解码种子
-  const keyBytes = base32Decode(secret);
+  // 1. secret 已为原始字节（base32 解码由调用方/parseOtpauthUri 完成）
+  const keyBytes = secret;
 
   // 2. 导入为 HMAC CryptoKey
   const subtleAlgo = algorithm === 'SHA1' ? 'SHA-1' : algorithm === 'SHA256' ? 'SHA-256' : 'SHA-512';
@@ -1010,8 +1014,7 @@ async function generateHOTP(
     await crypto.subtle.sign('HMAC', key, counterBytes),
   );
 
-  // 5. 覆写种子字节
-  secureWipe(keyBytes);
+  // 5. 不擦除输入：secret 由调用方持有，verifyTOTP 窗口循环复用同一数组
 
   // 6. 动态截断（RFC 4226 §5.3）
   const offset = hmacResult[hmacResult.length - 1]! & 0x0f;

@@ -20,9 +20,9 @@
     // 不在 tsconfig.json 手动声明 paths，避免与 SvelteKit 自动生成的 tsconfig 冲突。
 
     // --- 输出 ---
+    // 应用不产出 .d.ts 声明（svelte-check/vite 均不 emit）；
+    // `declaration:true` 会导致 betterAuth() 等返回类型因引用不可命名符号触发 TS2742，故移除。
     "outDir": ".svelte-kit/types",
-    "declaration": true,
-    "declarationMap": true,
     "sourceMap": true,
 
     // --- 其他 ---
@@ -35,6 +35,17 @@
     "checkJs": true,
     "resolveJsonModule": true
   },
-  "include": ["src/**/*", "tests/**/*"],
-  "exclude": ["node_modules"]
+  // include 须显式补 SvelteKit 生成的 ambient 声明文件（$env/* 模块声明所在）：
+  // 继承的 `**/*.ts` 不覆盖 .svelte-kit/ 下的 ambient.d.ts，致 $env/* 不可见。
+  // `$server-only` 的 ambient 声明由 src/server-only-ambient.ts 提供（svelte-check
+  // 不加载 glob 匹配的 .d.ts，故用 .ts 脚本文件承载全局 ambient 模块声明）。
+  "include": [
+    "src/**/*",
+    "tests/**/*",
+    ".svelte-kit/ambient.d.ts",
+    ".svelte-kit/env.d.ts",
+    ".svelte-kit/non-ambient.d.ts",
+    ".svelte-kit/types/**/*.d.ts"
+  ],
+  "exclude": ["node_modules", "src/service-worker.ts", "src/service-worker/**"]
 }

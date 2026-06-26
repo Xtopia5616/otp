@@ -42,11 +42,11 @@ Stage 1（`models/` API 类型 + `OccConflictError`/`ConflictError`/`NotFoundErr
   - `getVault(userId) → Promise<VaultResponse>`
   - `updateVaultBlob(userId, expectedVersion, encryptedBlob) → Promise<number>`（**CAS**：`UPDATE SET version=version+1 WHERE version=expectedVersion`；0 行→查当前行抛 `OccConflictError` 携 `serverVersion`/`serverEncryptedBlob`/`serverWrappedDekByMaster`，Engineering §8.3 代码为准）
   - `rotateWrappedDekByMaster(userId, newWrapped) → Promise<void>`
-- [ ] 4.5 `db/vault.ts` `rotateMasterPassword` 事务：单 `db.transaction` 内更新 `loginSalt`/`kdfSalt` + `wrappedDekByMaster` + BA 密码哈希（经 `auth.updatePasswordHash`）；**事务提交后**调 `auth.revokeOtherSessions`（非事务内）；Blob/version/wrappedDekByRecovery/passkey 行不动（Architecture §8.2）
-- [ ] 4.6 `db/user.ts`：`getAuthParamsByEmail(userId) → AuthParamsResponse`、`updateUserSaltsAndKdf`、`updateRecoveryMaterial`
+- [ ] 4.5 `db/vault.ts` `rotateMasterPassword` 事务：单 `db.transaction` 内更新 `loginSalt`/`kdfSalt` + `wrappedDekByMaster` + BA 密码哈希（事务内 `hashPassword(newLak)` + tx 直写 `account.password`，因 BA API 用独立 DB 连接无法加入事务；`updatePasswordHash` 为非事务独立变体）；**事务提交后**由 `rotateMasterPassword` 自身调 `auth.revokeOtherSessions(userId, exceptSessionId)`（非事务内）；Blob/version/wrappedDekByRecovery/passkey 行不动（Architecture §8.2）
+- [ ] 4.6 `db/user.ts`：`getAuthParamsByEmail(email) → Promise<AuthParamsResponse | null>`（不存在邮箱返回 null，路由据此走反枚举伪参数）、`updateUserSaltsAndKdf`、`updateRecoveryMaterial`
 - [ ] 4.7 `db/passkey-wrap.ts`：`listPasskeyWraps(userId)`、`createPasskeyWrap(userId, req)`（credentialId 唯一冲突→`ConflictError`）、`deletePasskeyWrap(userId, credentialId)`（行不存在→`NotFoundError`）
 - [ ] 4.8 `db/recover.ts`：
-  - `getRecoverMaterial(email) → RecoverInitResponse`
+  - `getRecoverMaterial(email) → RecoverInitResponse | null`（不存在邮箱返回 null，路由据此返回反枚举伪材料）
   - `resetRecovery` 事务：单 `db.transaction` 内更新 BA 密码哈希 + `loginSalt`/`kdfSalt` + `wrappedDekByMaster`/`wrappedDekByRecovery` + `recoverySalt`/`recoveryVerifierSalt`/`recoveryVerifier`；**事务提交后**调 `auth.revokeAllSessions`（Architecture §8.5）
 - [ ] 4.9 `db/session.ts`：委托 `auth` 的会话吊销
 - [ ] 4.10 `auth.ts`（Design §5.2）：Better Auth 实例 + Drizzle adapter + `@better-auth/passkey` 插件 + user 表扩展字段映射；`revokeOtherSessions(userId, exceptSessionId)` / `revokeAllSessions(userId)` / `updatePasswordHash(userId, newLak)` / `passkeyPluginConfig`（PRF 扩展注入点）

@@ -430,6 +430,17 @@ describe("HOTP — SHA256 / SHA512 分支", () => {
 
 ## 4. 密码学单元测试
 
+> **⚠️ 早期草案 API 名（已校正）**：以下 §4.1–§4.6 样例代码采用早期草案的 API 名/签名/模块路径，与实际实现**不一致**。实际 API 见下表与 `src/lib/crypto/*`；**实际通过的测试**见 `tests/unit/crypto/*`（argon2id / aes-gcm / blob-format / hkdf / base32 / lak / envelope / recovery-key / secure-wipe / crypto-errors），**以实际测试文件为权威**。测试*场景*（确定性 / 长度 / 篡改 / 拒绝 / 往返）与样例一致，已适配到实际 API。
+
+| 样例早期 API | 实际 API（`src/lib/crypto/`） | 差异说明 |
+| :--- | :--- | :--- |
+| `deriveArgon2id({password,salt,...params})` 自 `argon2id` | `deriveKEK(password, salt, params)` 自 `argon2` | 位置参数（非对象）；另有 `deriveLAK`/`deriveRecoveryVerifier` |
+| `deriveLak({password,salt,...params})` 自 `lak` | `deriveLAK(mpBytes, loginSalt, params)` 自 `argon2` | 位置参数；LAK 派生归 `argon2.ts`（无独立 `lak.ts`） |
+| `wrapDek`/`unwrapDek` 自 `aes-gcm` | `wrapDek`/`unwrapDek` 自 `envelope` | 包装组合在 `envelope.ts`；`aes-gcm.ts` 提供 `encryptAesGcm`/`decryptAesGcm`/`encryptAesGcmRandomIv` 纯核心 |
+| `parseBlob`/`serializeBlob` 自 `blob-format` | `parseBlob`/`serializeBlob` 自 `encoding` | 函数名相同，模块为 `encoding.ts`（无独立 `blob-format.ts` 模块；测试文件名仍为 `blob-format.test.ts`） |
+| `deriveKekPrf({prfOutput,salt,info})` 自 `hkdf` | `deriveKEKPrf(prfOut, prfSalt)` 自 `hkdf` | 位置参数；`info` 硬编码 `WebOTP/KEK-PRF/v1`（调用方不可控）；返回 `CryptoKey`（非 bytes） |
+| `decodeBase32` 自 `base32` | `base32Decode` 自 `encoding` | 另有 `base32Encode`/`base64Encode`/`base64Decode`（均归 `encoding.ts`） |
+
 ### 4.1 Argon2id 派生确定性
 
 ```typescript
